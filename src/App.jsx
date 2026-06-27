@@ -53,15 +53,57 @@ export default function HRMatchingTool() {
       reader.onload = async (e) => {
         const base64Data = e.target.result.split(',')[1];
 
-        try {
+        const apiHeaders = {
+            'Content-Type': 'application/json',
+            'x-api-key': import.meta.env.VITE_ANTHROPIC_API_KEY,
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true',
+          };
+
+          const pdfContent = {
+            type: 'document',
+            source: { type: 'base64', media_type: 'application/pdf', data: base64Data },
+          };
+
+          try {
+          // Step1: PDFから個人情報をマスクしたテキストを抽出
+          const maskResponse = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: apiHeaders,
+            body: JSON.stringify({
+              model: 'claude-sonnet-4-6',
+              max_tokens: 2000,
+              messages: [{
+                role: 'user',
+                content: [
+                  pdfContent,
+                  {
+                    type: 'text',
+                    text: `職務経歴書のテキストを抽出してください。その際、以下の個人情報を「[MASKED]」に置き換えてください。
+- 氏名
+- 住所
+- 電話番号
+- メールアドレス
+- 生年月日
+
+マスク済みのテキストのみを返してください。`,
+                  },
+                ],
+              }],
+            }),
+          });
+
+          if (!maskResponse.ok) {
+            throw new Error('API呼び出しに失敗しました');
+          }
+
+          const maskData = await maskResponse.json();
+          const maskedText = maskData.content.find(c => c.type === 'text')?.text || '';
+
+          // Step2: マスク済みテキストをスコアリング
           const response = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-api-key': import.meta.env.VITE_ANTHROPIC_API_KEY,
-              'anthropic-version': '2023-06-01',
-              'anthropic-dangerous-direct-browser-access': 'true',
-            },
+            headers: apiHeaders,
             body: JSON.stringify({
               model: 'claude-sonnet-4-6',
               max_tokens: 1000,
@@ -70,16 +112,11 @@ export default function HRMatchingTool() {
                   role: 'user',
                   content: [
                     {
-                      type: 'document',
-                      source: {
-                        type: 'base64',
-                        media_type: 'application/pdf',
-                        data: base64Data,
-                      },
-                    },
-                    {
                       type: 'text',
-                      text: `職務経歴書を分析し、下記のJSON形式のみで返してください。プリアンブルやマークダウンなしで、JSONのみです。
+                      text: `以下の職務経歴書テキストを分析し、下記のJSON形式のみで返してください。プリアンブルやマークダウンなしで、JSONのみです。
+
+職務経歴書テキスト:
+${maskedText}
 
 当社の情報:
 - 業種: ${companyInfo.industry}
