@@ -15,13 +15,24 @@ export default function HRMatchingTool() {
   // ファイルと結果の状態
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [loadingStep, setLoadingStep] = useState('');
+  const [maskedText, setMaskedText] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+
+  const apiHeaders = {
+    'Content-Type': 'application/json',
+    'x-api-key': import.meta.env.VITE_ANTHROPIC_API_KEY,
+    'anthropic-version': '2023-06-01',
+    'anthropic-dangerous-direct-browser-access': 'true',
+  };
 
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0];
     if (selectedFile && selectedFile.type === 'application/pdf') {
       setFile(selectedFile);
+      setMaskedText(null);
+      setResult(null);
       setError(null);
     } else {
       setError('PDFファイルを選択してください');
@@ -39,34 +50,25 @@ export default function HRMatchingTool() {
     setEditMode(false);
   };
 
-  const analyzeResume = async () => {
+  // Step1: PDFから個人情報をマスクしたテキストを抽出
+  const extractMaskedText = async () => {
     if (!file) {
       setError('ファイルを選択してください');
       return;
     }
 
     setLoading(true);
+    setLoadingStep('個人情報をマスク中...');
     setError(null);
+    setMaskedText(null);
+    setResult(null);
 
     try {
       const reader = new FileReader();
       reader.onload = async (e) => {
         const base64Data = e.target.result.split(',')[1];
 
-        const apiHeaders = {
-            'Content-Type': 'application/json',
-            'x-api-key': import.meta.env.VITE_ANTHROPIC_API_KEY,
-            'anthropic-version': '2023-06-01',
-            'anthropic-dangerous-direct-browser-access': 'true',
-          };
-
-          const pdfContent = {
-            type: 'document',
-            source: { type: 'base64', media_type: 'application/pdf', data: base64Data },
-          };
-
-          try {
-          // Step1: PDFから個人情報をマスクしたテキストを抽出
+        try {
           const maskResponse = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST',
             headers: apiHeaders,
@@ -76,7 +78,10 @@ export default function HRMatchingTool() {
               messages: [{
                 role: 'user',
                 content: [
-                  pdfContent,
+                  {
+                    type: 'document',
+                    source: { type: 'base64', media_type: 'application/pdf', data: base64Data },
+                  },
                   {
                     type: 'text',
                     text: `職務経歴書のテキストを抽出してください。その際、以下の個人情報を「[MASKED]」に置き換えてください。
@@ -98,22 +103,42 @@ export default function HRMatchingTool() {
           }
 
           const maskData = await maskResponse.json();
-          const maskedText = maskData.content.find(c => c.type === 'text')?.text || '';
+          const text = maskData.content.find(c => c.type === 'text')?.text || '';
+          setMaskedText(text);
+        } catch (err) {
+          setError('マスク処理中にエラーが発生しました: ' + err.message);
+        }
 
-          // Step2: マスク済みテキストをスコアリング
-          const response = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: apiHeaders,
-            body: JSON.stringify({
-              model: 'claude-sonnet-4-6',
-              max_tokens: 1000,
-              messages: [
-                {
-                  role: 'user',
-                  content: [
-                    {
-                      type: 'text',
-                      text: `以下の職務経歴書テキストを分析し、下記のJSON形式のみで返してください。プリアンブルやマークダウンなしで、JSONのみです。
+        setLoading(false);
+        setLoadingStep('');
+      };
+
+      reader.readAsDataURL(file);
+    } catch (err) {
+      setError('ファイル処理中にエラーが発生しました');
+      setLoading(false);
+      setLoadingStep('');
+    }
+  };
+
+  // Step2: マスク済みテキストをスコアリング
+  const scoreResume = async () => {
+    setLoading(true);
+    setLoadingStep('採点中...');
+    setError(null);
+
+    try {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: apiHeaders,
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 1000,
+          messages: [{
+            role: 'user',
+            content: [{
+              type: 'text',
+              text: `以下の職務経歴書テキストを分析し、下記のJSON形式のみで返してください。プリアンブルやマークダウンなしで、JSONのみです。
 
 職務経歴書テキスト:
 ${maskedText}
@@ -139,56 +164,46 @@ ${maskedText}
   "総合判定": "採用推奨か要検討か不適合",
   "推奨ポイント": "日本語のコメント"
 }`,
-                    },
-                  ],
-                },
-              ],
-            }),
-          });
+            }],
+          }],
+        }),
+      });
 
-          if (!response.ok) {
-            throw new Error('API呼び出しに失敗しました');
-          }
+      if (!response.ok) {
+        throw new Error('API呼び出しに失敗しました');
+      }
 
-          const data = await response.json();
-          const textContent = data.content.find(c => c.type === 'text')?.text || '';
+      const data = await response.json();
+      const textContent = data.content.find(c => c.type === 'text')?.text || '';
 
-          try {
-            let jsonStr = textContent.trim();
-            jsonStr = jsonStr.replace(/```json\s*/g, '').replace(/```\s*/g, '');
+      try {
+        let jsonStr = textContent.trim();
+        jsonStr = jsonStr.replace(/```json\s*/g, '').replace(/```\s*/g, '');
 
-            const start = jsonStr.indexOf('{');
-            const end = jsonStr.lastIndexOf('}');
+        const start = jsonStr.indexOf('{');
+        const end = jsonStr.lastIndexOf('}');
 
-            if (start === -1 || end === -1) {
-              throw new Error('JSON形式が見つかりません');
-            }
-
-            jsonStr = jsonStr.substring(start, end + 1);
-            const analysisResult = JSON.parse(jsonStr);
-
-            if (!analysisResult.総合スコア || !analysisResult.総合判定) {
-              throw new Error('必須フィールドが不足しています');
-            }
-
-            setResult(analysisResult);
-          } catch (err) {
-            setLoading(false);
-            setError('申し訳ありません。別のPDFファイルでお試しください。');
-          }
-        } catch (err) {
-          setLoading(false);
-          setError('分析中にエラーが発生しました: ' + err.message);
+        if (start === -1 || end === -1) {
+          throw new Error('JSON形式が見つかりません');
         }
 
-        setLoading(false);
-      };
+        jsonStr = jsonStr.substring(start, end + 1);
+        const analysisResult = JSON.parse(jsonStr);
 
-      reader.readAsDataURL(file);
+        if (!analysisResult.総合スコア || !analysisResult.総合判定) {
+          throw new Error('必須フィールドが不足しています');
+        }
+
+        setResult(analysisResult);
+      } catch (err) {
+        setError('申し訳ありません。別のPDFファイルでお試しください。');
+      }
     } catch (err) {
-      setError('ファイル処理中にエラーが発生しました');
-      setLoading(false);
+      setError('採点中にエラーが発生しました: ' + err.message);
     }
+
+    setLoading(false);
+    setLoadingStep('');
   };
 
   const getScoreColor = (score) => {
@@ -323,21 +338,53 @@ ${maskedText}
             )}
           </div>
 
-          {/* 分析ボタン */}
+          {/* Step1: マスク処理ボタン */}
           <button
-            onClick={analyzeResume}
+            onClick={extractMaskedText}
             disabled={!file || loading || editMode}
-            className="w-full bg-indigo-600 text-white font-semibold py-3 rounded-lg hover:bg-indigo-700 transition disabled:bg-gray-400 flex items-center justify-center gap-2"
+            className="w-full bg-indigo-600 text-white font-semibold py-3 rounded-lg hover:bg-indigo-700 transition disabled:bg-gray-400 flex items-center justify-center gap-2 mb-6"
           >
-            {loading ? (
+            {loading && loadingStep === '個人情報をマスク中...' ? (
               <>
                 <Loader className="w-5 h-5 animate-spin" />
-                分析中...
+                個人情報をマスク中...
               </>
             ) : (
-              '分析を開始'
+              'STEP 1: 個人情報をマスクして内容を確認'
             )}
           </button>
+
+          {/* マスク済みテキストの表示 */}
+          {maskedText && (
+            <div className="mb-6">
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="font-bold text-gray-800">送信内容の確認（マスク済み）</h2>
+                <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">個人情報は [MASKED] に置換済み</span>
+              </div>
+              <textarea
+                readOnly
+                value={maskedText}
+                className="w-full p-4 border border-gray-300 rounded-lg bg-gray-50 text-sm text-gray-700 font-mono resize-none focus:outline-none"
+                rows="12"
+              />
+
+              {/* Step2: 採点ボタン */}
+              <button
+                onClick={scoreResume}
+                disabled={loading || editMode}
+                className="w-full mt-4 bg-green-600 text-white font-semibold py-3 rounded-lg hover:bg-green-700 transition disabled:bg-gray-400 flex items-center justify-center gap-2"
+              >
+                {loading && loadingStep === '採点中...' ? (
+                  <>
+                    <Loader className="w-5 h-5 animate-spin" />
+                    採点中...
+                  </>
+                ) : (
+                  'STEP 2: この内容で採点する'
+                )}
+              </button>
+            </div>
+          )}
 
           {/* 結果表示 */}
           {result && (
