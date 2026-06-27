@@ -1,23 +1,5 @@
 import React from 'react';
-
-const SCORE_AXES = [
-  { key: 'ソフトウェア開発', label: 'ソフトウェア開発', max: 30 },
-  { key: '業界経験', label: '業界・製造業経験', max: 20 },
-  { key: 'IT_DX推進スキル', label: 'IT/DX推進スキル', max: 25 },
-  { key: 'ビジネススキル', label: 'ビジネススキル', max: 25 },
-];
-
-function getScoreColor(score) {
-  if (score >= 75) return 'text-green-600';
-  if (score >= 50) return 'text-yellow-600';
-  return 'text-red-600';
-}
-
-function getJudgmentColor(judgement) {
-  if (judgement === '採用推奨') return 'bg-green-100 text-green-800';
-  if (judgement === '要検討') return 'bg-yellow-100 text-yellow-800';
-  return 'bg-red-100 text-red-800';
-}
+import { SCORE_AXES, JUDGMENT_COLORS, getScoreColor } from '../constants';
 
 export default function ScoreResult({ result }) {
   if (!result) return null;
@@ -34,7 +16,7 @@ export default function ScoreResult({ result }) {
         </div>
       </div>
 
-      <div className={`rounded-lg p-4 mb-8 font-semibold text-center ${getJudgmentColor(result.総合判定)}`}>
+      <div className={`rounded-lg p-4 mb-8 font-semibold text-center ${JUDGMENT_COLORS[result.総合判定] ?? 'bg-gray-100 text-gray-800'}`}>
         {result.総合判定}
       </div>
 
