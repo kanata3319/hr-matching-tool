@@ -81,6 +81,9 @@ export default function HRMatchingTool() {
                       type: 'text',
                       text: `職務経歴書を分析し、下記のJSON形式のみで返してください。プリアンブルやマークダウンなしで、JSONのみです。
 
+個人情報の取り扱い:
+氏名・住所・電話番号・メールアドレス・生年月日などの個人を特定できる情報は評価に不要です。これらの情報は無視し、返却するJSONに含めないでください。
+
 当社の情報:
 - 業種: ${companyInfo.industry}
 - 採用職: ${companyInfo.position}
